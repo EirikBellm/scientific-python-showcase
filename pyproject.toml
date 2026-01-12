@@ -1,0 +1,17 @@
+[tool.poetry]
+name = "scientific-python-showcase"
+version = "0.1.0"
+description = "Scientific Python demos for numerical methods, simulation, and data analysis (NumPy/Matplotlib)."
+authors = ["Eirik Bell-Mathiesen <eiribel@uio.no>"]
+license = "MIT"
+readme = "README.md"
+
+[tool.poetry.dependencies]
+python = "^3.12"
+numpy = "^2.4.0"
+matplotlib = "^3.10.8"
+
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
