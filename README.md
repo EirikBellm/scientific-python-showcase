@@ -90,7 +90,6 @@ you should see files like:
 
 ## Example plots
 
-### Orbital simulation
 ### Spectral analysis
 <!-- Recommended: copy a few of your best plots into `figures/` and link locally. -->
 <!-- Example local links:
