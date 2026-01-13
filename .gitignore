@@ -19,3 +19,7 @@ dist/
 figures/*.png
 figures/*.pdf
 *.ipynb_checkpoints
+
+# Generated outputs
+scripts/*/outputs/
+orbits.npz

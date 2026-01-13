@@ -1,0 +1,13 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Run atmosphere_model (module)",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "pnshowcase.models.atmosphere_model",
+      "console": "integratedTerminal",
+      "cwd": "${workspaceFolder}"
+    }
+  ]
+}

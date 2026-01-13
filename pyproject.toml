@@ -5,11 +5,13 @@ description = "Scientific Python demos for numerical methods, simulation, and da
 authors = ["Eirik Bell-Mathiesen <eiribel@uio.no>"]
 license = "MIT"
 readme = "README.md"
+package-mode = false
 
 [tool.poetry.dependencies]
 python = "^3.12"
 numpy = "^2.4.0"
 matplotlib = "^3.10.8"
+scipy = "^1.17.0"
 
 
 [build-system]

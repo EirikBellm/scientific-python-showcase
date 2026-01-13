@@ -1,63 +1,65 @@
-##############################
-##### IKKE BRUKT KODEMAL #####
-##############################
+"""
+Spectral line analysis utilities.
 
-##############################
-#### NB denne filen må kjøres#
-# med en /data mappe som har #
-# noise og fluks data i seg  #
-# for 89 som to siste siffer #
-#  i seed                    #
-###############################
-
+Requires noise and flux files in scripts/spectral/outputs (see main()).
+"""
 
 import csv
 from pathlib import Path
-import ast2000tools.constants as konst
+
 import matplotlib.pyplot as plt
 import numpy as np
 
-#-----------------------------------------------------------
-#                  FYSIKK OG STATISTIKK
-#-----------------------------------------------------------
+HERE = Path(__file__).resolve().parent
+OUTPUTS_DIR = HERE / "outputs"
+DATA_DIR = OUTPUTS_DIR
+
+C_LIGHT_M_PER_S = 299792458.0  # m/s
+K_B_J_PER_K = 1.380649e-23  # J/K
+M_P_KG = 1.67262192595e-27  # kg
+
+# -----------------------------------------------------------
+# Physics and statistics
+# -----------------------------------------------------------
 
 def dopplerskift(bølge0, maks_fart, lysfart):
     """
-    Regner ut maksimal Doppler-forskyvning i bølgelengde for en gitt linje.
+    Compute the maximum Doppler shift in wavelength for a line.
 
-    Parametre
-    ---------
-    bølge0 : float
-        Lambda0 for linjen nm.
-    maks_fart : float
-        Øvre grense for radialhastighet |v| [m/s].
-    lysfart : float
-        Lyshastighet c [m/s].
-
-    Returnerer
+    Parameters
     ----------
+    bølge0 : float
+        Line center wavelength [nm].
+    maks_fart : float
+        Max radial speed |v| [m/s].
+    lysfart : float
+        Speed of light c [m/s].
+
+    Returns
+    -------
     float
-        Maksimalt bølgelengdeskift Delta-Lambda i [nm].
+        Maximum wavelength shift delta_lambda [nm].
     """
     return (maks_fart / lysfart) * bølge0
 
 
 def dopplerskift_til_fart(delta_lamda, bølge0, lysfart):
     """
-    Gjør om en Doppler-forskyvning i bølgelengde til en radialhastighet.
-        Parametre
-    ---------
-    delta_lambda : float 
-        bølgelengdeskift fra lambda 0 i nm.
-    bølge0 : float
-        Lambda0 for linjen nm.
-    lysfart : float
-        Lyshastighet c [m/s].
+    Convert a wavelength shift to radial velocity.
 
-    Returnerer
+    Parameters
     ----------
+    delta_lamda : float
+        Wavelength shift from lambda0 [nm].
+    bølge0 : float
+        Line center wavelength [nm].
+    lysfart : float
+        Speed of light c [m/s].
+
+    Returns
+    -------
     float
-        radialfart for tilhørende doplershift i m/s.
+        Radial speed corresponding to the shift [m/s].
     """
     return (delta_lamda / bølge0) * lysfart
 
@@ -72,43 +74,40 @@ def hent_arrayer(
     dopplerbuffer,
 ):
     """
-    Klipper ut et intervall rundt en forventet linje.
+    Extract a wavelength window around a target line.
 
-    Parametre
-    ---------
-    bølge0 : float
-        Senterbølgelengde for linja [nm].
-    bølgelengder : (N,) array
-        Akse for spektrum [nm]
-    fluks : (N,) array
-        Normalisert fluks 
-    noise : (N,) array
-        Standardavvik (sigma) per datapunkt, i samme enhet som fluks.
-    maks_fart : float
-        Øvre grense på |v_r| [m/s] brukt til intervallstørrelse.
-    lysfart : float
-        c [m/s].
-    dopplerbuffer : float
-        > 1.0 for å gi litt ekstra margin rundt teoretisk maks skift.
-
-    Returnerer
+    Parameters
     ----------
-    (lambda_intervall, fluks_intervall, noise_intervall) : tuple av arrays
+    bølge0 : float
+        Line center wavelength [nm].
+    bølgelengder : (N,) array
+        Wavelength axis [nm].
+    fluks : (N,) array
+        Normalized flux.
+    noise : (N,) array
+        Per-point sigma in the same units as flux.
+    maks_fart : float
+        Max |v_r| [m/s], used to set window size.
+    lysfart : float
+        Speed of light c [m/s].
+    dopplerbuffer : float
+        Factor (>1.0) to extend the window beyond the max shift.
+
+    Returns
+    -------
+    (lambda_intervall, fluks_intervall, noise_intervall) : tuple of arrays
     """
-    ###################################
-    ######## AVVIK FRA FLYTKART #######
-    # la til dopler buffer for at vi  #
-    # er sikre på at vi finner linja  #
-    ###################################
+    # Add a Doppler buffer to ensure the line is inside the window.
 
     skift = dopplerskift(bølge0, maks_fart, lysfart)
     intervall = skift * dopplerbuffer
     start_lamda = bølge0 - intervall
     slutt_lamda = bølge0 + intervall
 
-    # Finner intervallets indekser
+    # Find window indices.
     start_indeks = int(np.searchsorted(bølgelengder, start_lamda, side="left"))
     slutt_indeks = int(np.searchsorted(bølgelengder, slutt_lamda, side="right"))
+
 
     return (
         bølgelengder[start_indeks:slutt_indeks],
@@ -129,45 +128,40 @@ def chi_kvadrat(
     lysfart,
 ):
     """
-    Brute-force CHI^2-minimering over 3D rutenett (T, Delta-Lambda, fmin).
+    Brute-force chi^2 minimization over a 3D grid (T, delta_lambda, fmin).
 
-    METODE:
-    - Vi vektoriserer 3D rutenettet og regner ut modell(Lambda) for alle kombinasjoner.
-    - CHI^2 = sigma ((data - modell) / sigma)^2, summeres over bølgelengdepunkter.
-    - Beste indeks gir estimerte parametre (T_best, Delta-Lambda_best, fmin_best).
+    Method
+    ------
+    - Vectorize the 3D grid and evaluate the model for all combinations.
+    - chi^2 = sum(((data - model) / sigma)^2) over wavelength points.
+    - The best index gives (T_best, delta_lambda_best, fmin_best).
 
-    Returnerer
-    ----------
+    Returns
+    -------
     temperatur_best, forskyvning_best, fmin_best, chi2_min
     """
     fluks_intervall = np.asarray(fluks_intervall, dtype=float)
     noise_intervall = np.asarray(noise_intervall, dtype=float)
     lambda_intervall = np.asarray(lambda_intervall, dtype=float)
 
-    # Vektorisering: L = antall bølgelengdepunkter, og rutenettet er
-    # (n_T, n_shift, n_fmin). Vi gjør derfor data-arrays 4D slik at
-    # aksene følger [T, Delta-Lambda, fmin, lambda]:
+    # Vectorize: data arrays become 4D so axes are [T, delta_lambda, fmin, lambda].
     fluks = fluks_intervall[np.newaxis, np.newaxis, np.newaxis, :]
     noise = noise_intervall[np.newaxis, np.newaxis, np.newaxis, :]
     lamda = lambda_intervall[np.newaxis, np.newaxis, np.newaxis, :]
 
-    # Parametrene legges på de første tre aksene.
-    # temperatur: shape (n_T, 1, 1, 1), forskyvning: (1, n_shift, 1, 1),
-    # fmin: (1, 1, n_fmin, 1). Resultatene av operasjoner på disse blir automatisk
-    # broadcastet over alle lambda-punkter (siste akse).
+    # Parameters live on the first three axes and broadcast over lambda.
     temperatur = temperatur_grid[:, np.newaxis, np.newaxis, np.newaxis] 
     forskyvning = forskyvning_grid[np.newaxis, :, np.newaxis, np.newaxis]
     fmin = fmin_grid[np.newaxis, np.newaxis, :, np.newaxis]
 
-    # Regner ut Doppler-bredde for alle T
-    sigma_lamda = bølge0 * np.sqrt(konst.k_B * temperatur / masse) / lysfart
+    # Doppler width for all T.
+    sigma_lamda = bølge0 * np.sqrt(K_B_J_PER_K * temperatur / masse) / lysfart
 
-    # Gaussen har peak=1, og linjedybden styres av fmin
+    # Gaussian peak is 1; line depth is controlled by fmin.
     gauss = np.exp(-0.5 * ((lamda - (bølge0 + forskyvning)) / sigma_lamda) ** 2)
     modell = 1.0 - (1.0 - fmin) * gauss
 
-    # Chi2 summerer over lambda-aksen (axis=-1), slik at chi2 får
-    # shape (n_T, n_shift, n_fmin) og kan minimeres direkte.
+    # Sum over lambda so chi2 has shape (n_T, n_shift, n_fmin).
     chi2 = np.sum(((fluks - modell) / noise)**2, axis=-1)
 
     beste_indeks = np.unravel_index(np.argmin(chi2), chi2.shape)
@@ -178,22 +172,19 @@ def chi_kvadrat(
         chi2[beste_indeks],
     )
 
-#-----------------------------------------------------------
-#                    DATABEHANDLING
-#-----------------------------------------------------------
+# -----------------------------------------------------------
+# Data handling
+# -----------------------------------------------------------
 
 
 def finn_parametre(gassnavn, bølge0, rutenett, oppsett):
     """
-    #####################################################
-    ####### Denne funksjonen brukes ikke lenger #########
-    #####################################################
+    Deprecated helper for a single-line brute-force chi^2 search.
 
-    Finner beste T, Doppler-forskyvning og fmin for én linje ved brute-force CHI^2.
-
-    1) Henter intervall rundt Lambda0 .
-    2) Setter opp 1D rutenett for T, Delta-Lambda og fmin (alle med samme 'rutenett'-oppløsning).
-    3) Kjører CHI^2 og returnerer beste verdier.
+    Steps:
+    1) Extract the window around lambda0.
+    2) Build 1D grids for T, delta_lambda, and fmin (same resolution).
+    3) Run chi^2 and return the best values.
     """
     lambda_intervall, fluks_intervall, noise_intervall = hent_arrayer(
         bølge0,
@@ -205,18 +196,18 @@ def finn_parametre(gassnavn, bølge0, rutenett, oppsett):
         oppsett["dopplerbuffer"],
     )
 
-    # Setter temperaturgrid [K]
+    # Temperature grid [K].
     temperatur_grid = np.linspace(
         oppsett["temperaturomrade"][0],
         oppsett["temperaturomrade"][1],
         rutenett,
     )
 
-    # Setter Delta-Lambda-grid fra +- maks Doppler-skift
+    # Delta-lambda grid from +/- max Doppler shift.
     maks_skift = dopplerskift(bølge0, oppsett["maks_fart"], oppsett["lysfart"])
     forskyvning_grid = np.linspace(-maks_skift, maks_skift, rutenett)
 
-    # Setter fmin-grid: 0< fmin ≤1 (1 = ingen absorpsjon; lavere = dypere linje)
+    # fmin grid: 0 < fmin <= 1 (1 = no absorption, lower = deeper line).
     fmin_grid = np.linspace(
         oppsett["fmin_omrade"][0],
         oppsett["fmin_omrade"][1],
@@ -249,38 +240,30 @@ def finn_parametre(gassnavn, bølge0, rutenett, oppsett):
 
 def finn_parametre_iterativt(gassnavn, bølge0, rutenett, oppsett, antall=10, faktor=0.4):
     """
-    Utfører flere CHI^2-søk med gradvis innsnevring av parameterområdene rundt besteverdien.
+    Run iterative chi^2 searches with progressively narrower parameter ranges.
 
-    ###########################################
-    ########### AVVIK FRA FLYTKART ############
-    # Denne funksjonen gjør ca det samme som  #
-    # finn_parametre, men iterativt, slik at  #
-    # vi kan forbedre nøyaktighet på en mer   #
-    # tidseffektiv måte, vs å øke grid.       #
-    ###########################################
-
-    Parametre
-    ---------
-    gassnavn : str
-        Identifikator for linjen, brukes til å hente masse og globale intervaller.
-    bølge0 : float
-        Senterbølgelengde [nm] for linjen som analyseres.
-    rutenett : int
-        Antall gridpunkter pr. dimensjon i hvert brute-force søk.
-    oppsett : dict
-        Samler spektrum, støy og fysiske konstanter (samme struktur som i finn_parametre).
-    antall : int, optional
-        Hvor mange iterasjoner som kjøres. Standard er 10.
-    faktor : float, optional
-        Hvor mye intervallet skaleres per trinn (0 < faktor < 1). Standard 0.4.
-
-    Returnerer
+    Parameters
     ----------
-    dict
-        Resultat med beste T, Δλ, fmin og χ² fra siste iterasjon.
- """
+    gassnavn : str
+        Line identifier used to look up mass and global ranges.
+    bølge0 : float
+        Line center wavelength [nm].
+    rutenett : int
+        Grid points per dimension in each brute-force search.
+    oppsett : dict
+        Spectrum, noise, and physical constants (same structure as finn_parametre).
+    antall : int, optional
+        Number of iterations (default 10).
+    faktor : float, optional
+        Range scale per iteration (0 < faktor < 1). Default 0.4.
 
-    # Henter utsnitt av spekteret rundt aktuell bølgelengde:
+    Returns
+    -------
+    dict
+        Best T, delta_lambda, fmin, and chi^2 from the final iteration.
+    """
+
+    # Extract the spectrum window around the target wavelength.
     lambda_intervall, fluks_intervall, noise_intervall = hent_arrayer(
         bølge0,
         oppsett["bølgelengder"],
@@ -291,33 +274,34 @@ def finn_parametre_iterativt(gassnavn, bølge0, rutenett, oppsett, antall=10, fa
         oppsett["dopplerbuffer"],
     )
 
-    # Henter molekylmasse for valgt gass
+
+    # Molecular mass for the chosen gas.
     masse = oppsett["molekylmasser"][gassnavn]
 
-    # Globale søkeområder for temperatur, dopplerskift og F_min
+    # Global search ranges for temperature, Doppler shift, and fmin.
     temp_global = oppsett["temperaturomrade"]
     fmin_global = oppsett["fmin_omrade"]
 
-    # Maksimalt dopplerskift
+    # Maximum Doppler shift.
     maks_skift = dopplerskift(bølge0, oppsett["maks_fart"], oppsett["lysfart"])
     shift_global = (-maks_skift, maks_skift)
 
-    # Starter med å søke over hele globale intervaller
+    # Start with the full global ranges.
     temp_range = temp_global
     shift_range = shift_global
     fmin_range = fmin_global
 
-    # Holder på beste resultat fra siste iterasjon
+    # Store the best result from the last iteration.
     beste_resultat = None
 
-    # Iterativt CHI^2-søk: grovt først, så snevrer vi inn rundt beste verdi
+    # Iterative chi^2: coarse first, then narrow around the best value.
     for steg in range(antall):
-        # Lager 1D-rutenett for hver parameter innenfor gjeldende intervall
+        # Build 1D grids for the current ranges.
         temperatur_grid = np.linspace(temp_range[0], temp_range[1], rutenett)
         forskyvning_grid = np.linspace(shift_range[0], shift_range[1], rutenett)
         fmin_grid = np.linspace(fmin_range[0], fmin_range[1], rutenett)
 
-        # Finner parameterkombinasjonen som gir lavest chi^2 innenfor rutenettet
+        # Find the parameter set with minimum chi^2.
         (
             temperatur_best,
             forskyvning_best,
@@ -335,7 +319,7 @@ def finn_parametre_iterativt(gassnavn, bølge0, rutenett, oppsett, antall=10, fa
             oppsett["lysfart"],
         )
 
-        # Lagrer beste funn fra denne iterasjonen
+        # Store best values from this iteration.
         beste_resultat = {
             "gass": gassnavn,
             "bølge0": bølge0,
@@ -345,8 +329,7 @@ def finn_parametre_iterativt(gassnavn, bølge0, rutenett, oppsett, antall=10, fa
             "chi2": chi2_min,
         }
 
-        # På alle iterasjoner unntatt den siste snevrer vi inn søkeintervallene
-        # rundt de funnede besteverdiene for neste søk.
+        # Narrow the search ranges around the best values for the next iteration.
         if steg < antall - 1:
             temp_range = snevre_inn(temperatur_best, temp_range, temp_global, faktor)
             shift_range = snevre_inn(forskyvning_best, shift_range, shift_global, faktor)
@@ -356,45 +339,38 @@ def finn_parametre_iterativt(gassnavn, bølge0, rutenett, oppsett, antall=10, fa
 
 def snevre_inn(besteverdi, gjeldende, globalt, faktor):
     """
-    Snevrer inn et intervall rundt en ny besteverdi uten å gå utenfor globale grenser.
+    Narrow a range around a best value without crossing global bounds.
 
-    #############################################
-    ########## AVVIK FRA FLYTKART ###############
-    # Denne funksjonen la vi til for å forbedre #
-    # nøyaktigheten, se komentarer for tankegang#
-    #############################################
-
-    Parametre
-    ---------
-    besteverdi : float
-        Verdien som skal ligge i sentrum av det nye intervallet.
-    gjeldende : tuple(float, float)
-        Nåværende intervall (min, max) som skal skaleres.
-    globalt : tuple(float, float)
-        Absolutte fysiske grenser intervallet må holde seg innenfor.
-    faktor : float
-        Skalering av intervallbredden (0 < faktor < 1 gir innsnevring).
-
-    Returnerer
+    Parameters
     ----------
-    (nedre, øvre) : tuple(float, float)
-        Oppdatert intervall innenfor det globale området.
+    besteverdi : float
+        Value to center the new range on.
+    gjeldende : tuple(float, float)
+        Current range (min, max) to scale.
+    globalt : tuple(float, float)
+        Absolute physical bounds for the range.
+    faktor : float
+        Scale for range width (0 < faktor < 1 narrows the range).
+
+    Returns
+    -------
+    (nedre, ovre) : tuple(float, float)
+        Updated range within the global bounds.
 
     """
-    # Nåværende bredde på intervallet (øvre - nedre grense)
+    # Current range width.
     bredde = gjeldende[1] - gjeldende[0]
 
-    # Ny, smalere bredde etter innsnevringsfaktoren
+    # New, narrower width after scaling.
     ny_bredde = bredde * faktor
 
-    # Halv bredde brukes for å lage et symmetrisk intervall rundt besteverdi
+    # Half-width for a symmetric interval around the best value.
     halv = ny_bredde / 2.0
 
-    # Forsøker å legge nedre grense symmetrisk rundt besteverdien,
-    # men ikke utenfor det globale tillatte området
+    # Lower bound, clamped to the global range.
     nedre = max(globalt[0], besteverdi - halv)
 
-    # Tilsvarende for øvre grense
+    # Upper bound, clamped to the global range.
     ovre = min(globalt[1], besteverdi + halv)
 
     return (nedre, ovre)
@@ -402,8 +378,7 @@ def snevre_inn(besteverdi, gjeldende, globalt, faktor):
 
 def søk(gass_liste, oppsett, plottmappe, skriptmappe, rutenett=25):
     """
-    Kjører en full gjennomgang med finere rutenett og lagrer både plott og CSV.
-
+    Run the full line search, save plots and CSV outputs.
     """
     resultater = []
     for gassnavn, linjer in gass_liste:
@@ -412,27 +387,22 @@ def søk(gass_liste, oppsett, plottmappe, skriptmappe, rutenett=25):
                 continue
             resultat = finn_parametre_iterativt(gassnavn, bølge0, rutenett, oppsett)
             resultater.append(resultat)
-            # printing, plotting og resultater
-            print(
-                f"{resultat['gass']:>4} lambda0={resultat['bølge0']:7.1f} nm | "
-                f"T={resultat['temperatur']:7.2f} K | "
-                f"Delta lambda={resultat['delta_lamda']:+8.4f} nm | "
-                f"Fmin={resultat['fmin']:6.3f} | chi^2={resultat['chi2']:10.3f}"
-            )
+            # Print, plot, and store results.
+ 
             plott(resultat, oppsett, plottmappe, lagre=True)
 
-    # plotting og resultater
+    # Save aggregate outputs.
     sprednings_sti = parameter_spredning(resultater, plottmappe, lagre=True)
     csv_sti = skriv_csv(resultater, skriptmappe)
-    print(f"\nLagret {len(resultater)} resultater i {csv_sti}")
-    print(f"Plottene ligger i {plottmappe}")
+    print(f"\nSaved {len(resultater)} results to {csv_sti}")
+    print(f"Plots saved in {plottmappe}")
     if sprednings_sti:
-        print(f"Parameterplott lagret i {sprednings_sti}")
+        print(f"Parameter plot saved to {sprednings_sti}")
 
 
-#-----------------------------------------------------------
-#               PLOTTING OG HJELPEFUNKSJONER
-#-----------------------------------------------------------
+# -----------------------------------------------------------
+# Plotting helpers
+# -----------------------------------------------------------
 
 def gauss_plott(
     lambda_intervall,
@@ -445,19 +415,18 @@ def gauss_plott(
     lysfart,
 ):
     """
-    Denne funksjonen brukes bare til plotting.
+    Helper for plotting the Gaussian line model.
     """
     sigma_lamda = bølge0 * np.sqrt(boltzmann * temperatur / masse) / lysfart
-    # Gaussen har peak = 1 ved Lambda = Lambda0 + Delta-Lambda
+    # Peak = 1 at lambda = lambda0 + delta_lambda.
     gauss = np.exp(-0.5 * ((lambda_intervall - (bølge0 + delta_lamda)) / sigma_lamda) ** 2)
-    # Fluksmodellen er 1 i kontinua og fmin i sentrum (absorpsjon)
+    # Continuum is 1, line center is fmin.
     return 1.0 - (1.0 - fmin) * gauss
 
 
 def plott(resultat, oppsett, plottmappe, lagre=True):
     """
-    Visualiserer data + beste modell for ett linjeintervall.
-
+    Plot data and best-fit model for one line window.
     """
     lambda_intervall, fluks_intervall, noise_intervall = hent_arrayer(
         resultat["bølge0"],
@@ -485,17 +454,27 @@ def plott(resultat, oppsett, plottmappe, lagre=True):
         oppsett["boltzmann"],
         oppsett["lysfart"],
     )
-
+    if lambda_intervall.size == 0:
+        print(
+            f"{resultat['gass']} {resultat['bølge0']:.1f}nm: "
+            "no points in interval; skipping plot"
+        )
+        return None
+    print(
+        f"{resultat['gass']} {resultat['bølge0']:.1f}nm: "
+        f"N={len(lambda_intervall)} points, "
+        f"range={lambda_intervall[0]:.5f}-{lambda_intervall[-1]:.5f} nm"
+    )
     plt.figure(figsize=(7, 4))
-    plt.plot(lambda_intervall, fluks_intervall, label="Fluks", linewidth=1.0)
-    plt.plot(lambda_intervall, modell, label="Modell", linewidth=1.5)
+    plt.plot(lambda_intervall, fluks_intervall, label="Flux", linewidth=1.0)
+    plt.plot(lambda_intervall, modell, label="Model", linewidth=1.5)
     plt.fill_between(
         lambda_intervall,
         1 - noise_intervall,
         1 + noise_intervall,
         color="gray",
         alpha=0.3,
-        label="Støy +-sigma",
+        label="Noise +/- sigma",
     )
     plt.axvline(
         resultat["bølge0"],
@@ -504,10 +483,10 @@ def plott(resultat, oppsett, plottmappe, lagre=True):
         linewidth=0.8,
         label="lambda0",
     )
-    plt.xlabel("Bølgelengde [nm]")
-    plt.ylabel("Normalisert fluks")
+    plt.xlabel("Wavelength [nm]")
+    plt.ylabel("Normalized flux")
     plt.title(
-        f"{resultat['gass']} ved {resultat['bølge0']:.1f} nm "
+        f"{resultat['gass']} at {resultat['bølge0']:.1f} nm "
         f"(v_r={radial_hastighet/1000:+.2f} km/s)"
     )
     plt.legend()
@@ -525,7 +504,7 @@ def plott(resultat, oppsett, plottmappe, lagre=True):
         plt.show()
     except Exception as feil:
         print(
-            f"Klarte ikke å vise plott for {resultat['gass']} ved "
+            f"Failed to show plot for {resultat['gass']} at "
             f"{resultat['bølge0']:.1f} nm: {feil}"
         )
     finally:
@@ -535,15 +514,14 @@ def plott(resultat, oppsett, plottmappe, lagre=True):
 
 def parameter_spredning(resultater, plottmappe, lagre=True):
     """
-    Tegner et spredningsplott med temperatur på x-aksen, radialhastighet på y-aksen
-    og farger punktene etter relativ fluks (fmin) for å se mønstre.
+    Scatter plot of temperature vs radial velocity colored by relative flux (fmin).
     """
     if not resultater:
         return None
 
     temperaturer = [rad["temperatur"] for rad in resultater]
     hastigheter = [
-        dopplerskift_til_fart(rad["delta_lamda"], rad["bølge0"], konst.c)
+        dopplerskift_til_fart(rad["delta_lamda"], rad["bølge0"], C_LIGHT_M_PER_S)
         for rad in resultater
     ]
     flukser = [rad["fmin"] for rad in resultater]
@@ -559,10 +537,10 @@ def parameter_spredning(resultater, plottmappe, lagre=True):
         s=60,
     )
     cbar = plt.colorbar(spredning)
-    cbar.set_label("Relativ fluks (fmin)")
-    plt.xlabel("Temperatur [K]")
-    plt.ylabel("Radialhastighet [m/s]")
-    plt.title("Parameterfordeling for alle linjer")
+    cbar.set_label("Relative flux (fmin)")
+    plt.xlabel("Temperature [K]")
+    plt.ylabel("Radial velocity [m/s]")
+    plt.title("Parameter distribution across all lines")
     plt.tight_layout()
 
     if lagre:
@@ -576,7 +554,7 @@ def parameter_spredning(resultater, plottmappe, lagre=True):
     try:
         plt.show()
     except Exception as feil:
-        print(f"Klarte ikke å vise parameterplott: {feil}")
+        print(f"Failed to show parameter plot: {feil}")
     finally:
         plt.close()
     return sprednings_sti
@@ -584,19 +562,19 @@ def parameter_spredning(resultater, plottmappe, lagre=True):
 
 def skriv_csv(resultater, skriptmappe):
     """
-    Lagrer alle linjeresultater som CSV for videre bruk / resultater.
+    Save all line results as a CSV.
     """
     csv_sti = skriptmappe / "line_search_results.csv"
     with csv_sti.open("w", newline="") as fil:
         skriver = csv.writer(fil)
         skriver.writerow(
-            ["gass", "lambda_nm", "temperatur_K", "radial_speed_m_per_s", "Fmin", "chi2"]
+            ["gas", "lambda_nm", "temperature_K", "radial_speed_m_per_s", "fmin", "chi2"]
         )
         for rad in resultater:
             radial_hastighet = dopplerskift_til_fart(
                 rad["delta_lamda"],
                 rad["bølge0"],
-                konst.c,
+                C_LIGHT_M_PER_S,
             )
             skriver.writerow(
                 [
@@ -613,43 +591,50 @@ def skriv_csv(resultater, skriptmappe):
 
 def main():
     """
-    1) Leser spektrum og støy (nm, fluks, sigma).
-    2) Definerer kandidatlinjer (fra tabell i oppgaven).
-    3) Setter fysikk-konstanter og molekylmasser.
-    4) Kjører rask eller sakte
+    1) Load spectrum and noise (nm, flux, sigma).
+    2) Define candidate lines.
+    3) Set constants and molecular masses.
+    4) Run the line search.
     """
-    skriptmappe = Path(__file__).resolve().parent
-    plottmappe = skriptmappe / "plots"
+    OUTPUTS_DIR.mkdir(parents=True, exist_ok=True)
+    skriptmappe = OUTPUTS_DIR
+    plottmappe = OUTPUTS_DIR
 
-    # Leser inn spektrum og støy per punkt
-    spektrumdata = np.loadtxt('prosjektfiler/del6/data/spectrum_seed89_600nm_3000nm.txt')
-    noisedata = np.loadtxt('prosjektfiler/del6/data/sigma_noise.txt')
+    # Load spectrum and per-point noise from outputs.
+    spectrum_path = DATA_DIR / "spectrum_600nm_1000nm.txt"
+    if not spectrum_path.exists():
+        spectrum_candidates = sorted(DATA_DIR.glob("spectrum_seed*_600nm_1000nm.txt"))
+        if not spectrum_candidates:
+            raise FileNotFoundError(
+                f"No spectrum files found in {DATA_DIR}. Run spectral_data.py first."
+            )
+        spectrum_path = spectrum_candidates[-1]
+    noise_path = DATA_DIR / "sigma_noise.txt"
+    if not noise_path.exists():
+        raise FileNotFoundError(
+            f"{noise_path} not found. Run spectral_data.py first."
+        )
+
+    spektrumdata = np.loadtxt(spectrum_path)
+    noisedata = np.loadtxt(noise_path)
     bølgelengder = spektrumdata[:, 0]
     fluks = spektrumdata[:, 1]
     noise = noisedata[:, 1]
 
-    # Definerer tillatt linjedybde: fmin [0.7, 1.0], la til 0.05 buffer
+    # Allowed line depth: fmin in [0.65, 1.0] (with a 0.05 buffer).
     fmin_omrade = (0.65, 1.0)
 
-    # Lister kandidatlinjer (nm). None = ikke definert andre/tredje linje.
+    # Candidate lines (nm). None means no second/third line.
     gass_liste = [
         ("O2", [632.0, 690.0, 760.0]),
         ("H2O", [720.0, 820.0, 940.0]),
-        ("CO2", [1400.0, 1600.0, None]),
-        ("CH4", [1660.0, 2200.0, None]),
-        ("CO", [2340.0, None, None]),
-        ("N2O", [2870.0, None, None]),
     ]
 
-    # Setter masse: atommasse * protonmasse 
-    protonmasse = konst.m_p
+    # Molecular masses: atomic mass * proton mass.
+    protonmasse = M_P_KG
     molekylmasser = {
         "O2": 32.0 * protonmasse,
         "H2O": 18.0 * protonmasse,
-        "CO2": 44.0 * protonmasse,
-        "CH4": 16.0 * protonmasse,
-        "CO": 28.0 * protonmasse,
-        "N2O": 44.0 * protonmasse,
     }
 
     oppsett = {
@@ -658,10 +643,10 @@ def main():
         "noise": noise,
         "temperaturomrade": (100, 500),   # K
         "fmin_omrade": fmin_omrade,
-        "maks_fart": 10_000.0,               # m/s (radial, brukes til intervall og Delta-Lambda-grid)
-        "dopplerbuffer": 1.10,               # 10% margin rundt maks skift
-        "lysfart": konst.c,                  # m/s
-        "boltzmann": konst.k_B,              # J/K
+        "maks_fart": 10_000.0,               # m/s (radial, used for window and delta-lambda grid)
+        "dopplerbuffer": 1.10,               # 10% margin around max shift
+        "lysfart": C_LIGHT_M_PER_S,          # m/s
+        "boltzmann": K_B_J_PER_K,            # J/K
         "molekylmasser": molekylmasser,
     }
 

@@ -1,1 +1,0 @@
-"""Physics numerics showcase package."""
