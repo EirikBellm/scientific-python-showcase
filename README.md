@@ -91,11 +91,7 @@ you should see files like:
 ## Example plots
 
 ### Spectral analysis
-<!-- Recommended: copy a few of your best plots into `figures/` and link locally. -->
-<!-- Example local links:
-![Orbits](figures/orbits.png)
--->
-<!-- Or keep your GitHub attachment links below: -->
+
 <img width="697" height="400" alt="Orbit plot 1" src="https://github.com/user-attachments/assets/73f06065-0f18-4d23-a93d-61657ab06345" />
 <img width="700" height="448" alt="Orbit plot 2" src="https://github.com/user-attachments/assets/efe191b2-607b-4abe-8b8a-0e13baeb3760" />
 
